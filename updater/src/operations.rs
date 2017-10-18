@@ -56,6 +56,12 @@ impl Operations {
 		Ok(({ let r = result.pop().ok_or("Invalid return arity")?; let r = r.to_bool().ok_or("Invalid type returned")?; r }))
 		*/
 
+
+		// First step: make function calls generic
+		// Second step: closure
+		// Third step: remove operations.rs altogether?
+		// Also: check if we only use the constant functions (only used: release, checksum, latest_in_track, latest_fork)
+
 		use std::str::FromStr;
 
 		let _release_u256 : bigint::prelude::U256 = _release.into();
@@ -68,6 +74,7 @@ impl Operations {
 				_release_u256,
 				|input| (self.do_call)(self.address.clone(), input).map_err(|s| s.into()) // <-- something is fishy here
 			);
+		// next step : do call ? address... etc.
 		call.map_err(|e| format!("{:?}", e))
 
 		// let mut result = output.into_iter().rev().collect::<Vec<_>>();
@@ -351,13 +358,38 @@ impl Operations {
 	/// Auto-generated from: `{"constant":true,"inputs":[{"name":"_client","type":"bytes32"},{"name":"_track","type":"uint8"}],"name":"latestInTrack","outputs":[{"name":"","type":"bytes32"}],"payable":false,"type":"function"}`
 	#[allow(dead_code)]
 	pub fn latest_in_track(&self, _client: &str, _track: u8) -> Result<bigint::hash::H256, String> {
-		let call = self.contract.function("latestInTrack".into()).map_err(Self::as_string)?;
-		let data = call.encode_input(&
-			&vec![ethabi::Token::FixedBytes(_client.as_bytes().to_owned()), ethabi::Token::Uint({ let mut r = [0u8; 32]; bigint::prelude::U256::from(_track as u64).to_big_endian(&mut r); r })]
-		).map_err(Self::as_string)?;
-		let output = call.decode_output(&(self.do_call)(self.address.clone(), data)?).map_err(Self::as_string)?;
-		let mut result = output.into_iter().rev().collect::<Vec<_>>();
-		Ok(({ let r = result.pop().ok_or("Invalid return arity")?; let r = r.to_fixed_bytes().ok_or("Invalid type returned")?; bigint::hash::H256::from_slice(r.as_ref()) }))
+		// old version:
+		// let call = self.contract.function("latestInTrack".into()).map_err(Self::as_string)?;
+		// let data = call.encode_input(&
+		// 	&vec![ethabi::Token::FixedBytes(_client.as_bytes().to_owned()), ethabi::Token::Uint({ let mut r = [0u8; 32]; bigint::prelude::U256::from(_track as u64).to_big_endian(&mut r); r })]
+		// ).map_err(Self::as_string)?;
+		// let output = call.decode_output(&(self.do_call)(self.address.clone(), data)?).map_err(Self::as_string)?;
+		// let mut result = output.into_iter().rev().collect::<Vec<_>>();
+		// Ok(({ let r = result.pop().ok_or("Invalid return arity")?; let r = r.to_fixed_bytes().ok_or("Invalid type returned")?; bigint::hash::H256::from_slice(r.as_ref()) }))
+
+
+		use std::str::FromStr;
+
+		// let _release_u256 : bigint::prelude::U256 = _release.into();
+
+		// todo make this a function when we remove operations.rs
+		// u8 to ethabi::Uint([u8;32])
+		let mut _track_uint : ethabi::Uint = [0u8;32];
+		_track_uint[31] = _track;
+
+		let call = self.derived_contract
+			.functions()
+			.latest_in_track()
+			.call(
+				bigint::prelude::U256::from_str(_client).unwrap(),
+				// need to convert u8 to ethabi::Uint ([u8;32])
+				_track_uint, // [0u8; 32], // _track,
+				// @@next step
+				// do.call peut être une fonction interne?
+				|input| (self.do_call)(self.address.clone(), input).map_err(|s| s.into()) // <-- something is fishy here
+			);
+		// next step : do call ? address... etc.
+		call.map(|x| bigint::hash::H256(x)).map_err(|e| format!("{:?}", e))
 	}
 
 	/// Auto-generated from: `{"constant":true,"inputs":[{"name":"_client","type":"bytes32"},{"name":"_release","type":"bytes32"},{"name":"_platform","type":"bytes32"}],"name":"checksum","outputs":[{"name":"","type":"bytes32"}],"payable":false,"type":"function"}`

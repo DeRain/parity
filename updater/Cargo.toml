@@ -25,3 +25,6 @@ parking_lot = "0.4"
 parity-hash-fetch = { path = "../hash-fetch" }
 parity-reactor = { path = "../util/reactor" }
 path = { path = "../util/path" }
+
+[dev-dependencies]
+parity-rpc = { path = "../rpc" }

@@ -2272,6 +2272,7 @@ dependencies = [
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "parity-hash-fetch 1.9.0",
  "parity-reactor 0.1.0",
+ "parity-rpc 1.9.0",
  "parking_lot 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "path 0.1.0",
  "semver 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
-//! Test implementation of SyncProvider.
+// //! Test implementation of SyncProvider.
 
 use std::collections::BTreeMap;
 use bigint::hash::H256;

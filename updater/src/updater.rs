@@ -397,9 +397,58 @@ impl Service for Updater {
 
 #[cfg(test)]
 mod tests {
-	// use super::operations::Operations ?
+	// use super::operations::Operations;
 
 	// use_contract!(operations,"Operations","./res/operations.abi");
+
+	extern crate parity_rpc;
+
+	// Temporary scaffolding for the test; need to find another way
+	mod test_utils {
+
+		macro_rules! map {
+			() => { BTreeMap::new() };
+			( $( $x:expr => $y:expr ),* ) => {{
+				let mut x = BTreeMap::new();
+				$(
+					x.insert($x, $y);
+				)*
+				x
+			}}
+		}
+
+		include!("../../rpc/src/v1/tests/helpers/sync_provider.rs");
+	}
+
+	#[test]
+	fn test_updater() {
+		use super::Updater;
+		use ethcore::client::TestBlockChainClient;
+		use ethcore::client::BlockChainClient;
+		use super::SyncProvider;
+		// use sync::EthSync;
+		use super::UpdatePolicy;
+		use super::FetchService;
+		use hash_fetch::fetch::Fetch;
+		use super::Remote;
+		use std::sync::Weak;
+		use std::sync::Arc;
+		use self::test_utils::*;
+		use operations::Operations;
+
+		let client : Arc<BlockChainClient> = Arc::new(TestBlockChainClient::default());
+		let sync : Arc<SyncProvider> = Arc::new(TestSyncProvider::new(Config {network_id: 1u64, num_peers: 12}));
+		let updater = Updater::new(Arc::downgrade(&client), Arc::downgrade(&sync), UpdatePolicy::default(), FetchService::new().unwrap(), Remote::new_sync());
+
+		let address : ::util::Address = 0x111114df6d3c2b833ace.into();
+		let closure = move |address, data| Err("Mock mock mock".to_owned());
+
+		let mut m = updater.operations.lock();
+		*m = Some(Operations::new(address, closure));
+		// updater
+		let result = updater.collect_latest();
+		println!("collect_latest result {:?}",result);
+	}
 
 	#[test]
 	fn test_derive_call() {
@@ -407,8 +456,11 @@ mod tests {
 		let address : ::util::Address = 0x111114df6d3c2b833ace.into();
 		let closure = move |address, data| Err("Mock mock mock".to_owned());
 		let ops = Operations::new(address, closure);
-		let bh : ::bigint::hash::H256 = 3u64.into();
-		let result = ops.is_latest(&"parity".to_owned(), &bh);
-		println!("{:?}", result);
+		let bh : ::bigint::prelude::U256 = 3u64.into();
+		// let result = ops.is_latest(&"184218".to_owned(), &bh);
+		let result = ops.latest_in_track(&"184218".to_owned(), 123u8);
+		println!("{:?}",result);
+
+		// @TODO check quand operations est initialisé, j'ai pas forcément le droit de replace in place
 	}
 }
