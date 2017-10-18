@@ -36,6 +36,8 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use util::misc;
 
+use_contract!(operations_contract,"Operations","./res/operations.abi");
+
 /// Filter for releases.
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum UpdateFilter {
@@ -96,6 +98,7 @@ pub struct Updater {
 	sync: Weak<SyncProvider>,
 	fetcher: Mutex<Option<fetch::Client>>,
 	operations: Mutex<Option<Operations>>,
+	operations_contract: operations_contract::Operations,
 	exit_handler: Mutex<Option<Box<Fn() + 'static + Send>>>,
 
 	// Our version info (static)
@@ -128,6 +131,7 @@ impl Updater {
 			sync: sync.clone(),
 			fetcher: Mutex::new(None),
 			operations: Mutex::new(None),
+			operations_contract: operations_contract::Operations::default(),
 			exit_handler: Mutex::new(None),
 			this: VersionInfo::this(),
 			state: Mutex::new(Default::default()),
