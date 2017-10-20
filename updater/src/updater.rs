@@ -38,6 +38,23 @@ use util::misc;
 
 use_contract!(operations_contract,"Operations","./res/operations.abi");
 
+mod UpdaterUtils {
+	use ethabi;
+	use bigint;
+	pub fn str_to_ethabi_hash(s: &str) -> ethabi::Hash {
+		use std::str::FromStr;
+		bigint::prelude::U256::from_str(s).unwrap().into()
+	}
+
+	pub fn uint_to_u64(uint: [u8; 32]) -> u64 {
+		bigint::prelude::U256::from(uint.as_ref()).as_u64()
+	}
+
+	pub fn uint_to_h256(uint: [u8; 32]) -> bigint::prelude::H256 {
+		bigint::prelude::H256::from(uint.as_ref())
+	}
+}
+
 /// Filter for releases.
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum UpdateFilter {
@@ -111,15 +128,6 @@ pub struct Updater {
 
 const CLIENT_ID: &'static str = "parity";
 
-mod UpdaterUtils {
-	use ethabi;
-	use bigint;
-	pub fn str_to_ethabi_hash(s: &str) -> ethabi::Hash {
-		use std::str::FromStr;
-		bigint::prelude::U256::from_str(s).unwrap().into()
-	}
-}
-
 fn platform() -> String {
 	if cfg!(target_os = "macos") {
 		"x86_64-apple-darwin".into()
@@ -177,42 +185,45 @@ impl Updater {
 	}
 
 	fn collect_latest(&self) -> Result<OperationsInfo, String> {
-		if let Some(ref operations) = *self.operations.lock() { // @TODO remplacer par if some do call
-			if let Some(ref do_call) = *self.do_call.lock() {
-				let hh: H256 = self.this.hash.into();
-				trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
-				let this_fork = operations.release(CLIENT_ID, &self.this.hash.into()).ok()
-					.and_then(|(fork, track, _, _)| {
-						trace!(target: "updater", "Operations returned fork={}, track={}", fork as u64, track);
-						if track > 0 {Some(fork as u64)} else {None}
-					});
+		if let (Some(ref operations), Some(ref do_call)) = (*self.operations.lock(), *self.do_call.lock()) { // @TODO remplacer par if some do call
+			let hh: H256 = self.this.hash.into();
+			trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
+			let this_fork = self.operations_contract.functions().release().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
+				self.this.hash.into(),
+				&**do_call).ok()
+				.and_then(|(fork, track, _, _)| {
+					let fork_u64 : u64 = UpdaterUtils::uint_to_u64(fork);
+					let track_u64 : u64 = UpdaterUtils::uint_to_u64(track);
+					trace!(target: "updater", "Operations returned fork={}, track={}", fork_u64, track_u64);
+					if track_u64 > 0 {Some(fork_u64)} else {None}
+				});
+			// ^ previously returned (u32, u8, u32, bool), now returns ([u8; 32], [u8; 32], [u8; 32], bool)
 
-				if self.track() == ReleaseTrack::Unknown {
-					return Err(format!("Current executable ({}) is unreleased.", H160::from(self.this.hash)));
-				}
-
-				// todo utiliser Some(do_call_fn) comme ça pas besoin de unwrap
-				// let latest_in_track = operations.latest_in_track(CLIENT_ID, self.track().into())?;
-				let latest_in_track = self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), self.track().into(), &**do_call).map_err(|e| format!("{:?}", e))?;
-				let in_track = Self::collect_release_info(operations, &latest_in_track)?;
-				let mut in_minor = Some(in_track.clone());
-				const PROOF: &'static str = "in_minor initialised and assigned with Some; loop breaks if None assigned; qed";
-				while in_minor.as_ref().expect(PROOF).version.track != self.track() {
-					let track = match in_minor.as_ref().expect(PROOF).version.track {
-						ReleaseTrack::Beta => ReleaseTrack::Stable,
-						ReleaseTrack::Nightly => ReleaseTrack::Beta,
-						_ => { in_minor = None; break; }
-					};
-					in_minor = Some(Self::collect_release_info(operations, &operations.latest_in_track(CLIENT_ID, track.into())?)?);
-				}
-
-				Ok(OperationsInfo {
-					fork: operations.latest_fork()? as u64,
-					this_fork: this_fork,
-					track: in_track,
-					minor: in_minor,
-				})
+			if self.track() == ReleaseTrack::Unknown {
+				return Err(format!("Current executable ({}) is unreleased.", H160::from(self.this.hash)));
 			}
+
+			// todo utiliser Some(do_call_fn) comme ça pas besoin de unwrap
+			// let latest_in_track = operations.latest_in_track(CLIENT_ID, self.track().into())?;
+			let latest_in_track = self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), self.track().into(), &**do_call).map_err(|e| format!("{:?}", e)).map(|x| UpdaterUtils::uint_to_h256(x) )?;
+			let in_track = Self::collect_release_info(operations, &latest_in_track)?;
+			let mut in_minor = Some(in_track.clone());
+			const PROOF: &'static str = "in_minor initialised and assigned with Some; loop breaks if None assigned; qed";
+			while in_minor.as_ref().expect(PROOF).version.track != self.track() {
+				let track = match in_minor.as_ref().expect(PROOF).version.track {
+					ReleaseTrack::Beta => ReleaseTrack::Stable,
+					ReleaseTrack::Nightly => ReleaseTrack::Beta,
+					_ => { in_minor = None; break; }
+				};
+				in_minor = Some(Self::collect_release_info(operations, &operations.latest_in_track(CLIENT_ID, track.into())?)?);
+			}
+
+			Ok(OperationsInfo {
+				fork: operations.latest_fork()? as u64,
+				this_fork: this_fork,
+				track: in_track,
+				minor: in_minor,
+			})
 		} else {
 			Err("Operations not available".into())
 		}
