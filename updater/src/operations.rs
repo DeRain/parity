@@ -72,7 +72,7 @@ impl Operations {
 			.call(
 				bigint::prelude::U256::from_str(_client).unwrap(),
 				_release_u256,
-				|input| (self.do_call)(self.address.clone(), input).map_err(|s| s.into()) // <-- something is fishy here
+				&|input| (self.do_call)(self.address.clone(), input).map_err(|s| s.into()) // <-- something is fishy here
 			);
 		// next step : do call ? address... etc.
 		call.map_err(|e| format!("{:?}", e))
@@ -386,7 +386,7 @@ impl Operations {
 				_track_uint, // [0u8; 32], // _track,
 				// @@next step
 				// do.call peut être une fonction interne?
-				|input| (self.do_call)(self.address.clone(), input).map_err(|s| s.into()) // <-- something is fishy here
+				&|input| (self.do_call)(self.address.clone(), input).map_err(|s| s.into()) // <-- something is fishy here
 			);
 		// next step : do call ? address... etc.
 		call.map(|x| bigint::hash::H256(x)).map_err(|e| format!("{:?}", e))

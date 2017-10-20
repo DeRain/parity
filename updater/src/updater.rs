@@ -99,6 +99,7 @@ pub struct Updater {
 	fetcher: Mutex<Option<fetch::Client>>,
 	operations: Mutex<Option<Operations>>,
 	operations_contract: operations_contract::Operations,
+	do_call: Mutex<Option<Box<Fn(Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync + 'static>>>,
 	exit_handler: Mutex<Option<Box<Fn() + 'static + Send>>>,
 
 	// Our version info (static)
@@ -109,6 +110,15 @@ pub struct Updater {
 }
 
 const CLIENT_ID: &'static str = "parity";
+
+mod UpdaterUtils {
+	use ethabi;
+	use bigint;
+	pub fn str_to_ethabi_hash(s: &str) -> ethabi::Hash {
+		use std::str::FromStr;
+		bigint::prelude::U256::from_str(s).unwrap().into()
+	}
+}
 
 fn platform() -> String {
 	if cfg!(target_os = "macos") {
@@ -132,6 +142,7 @@ impl Updater {
 			fetcher: Mutex::new(None),
 			operations: Mutex::new(None),
 			operations_contract: operations_contract::Operations::default(),
+			do_call: Mutex::new(None),
 			exit_handler: Mutex::new(None),
 			this: VersionInfo::this(),
 			state: Mutex::new(Default::default()),
@@ -166,38 +177,42 @@ impl Updater {
 	}
 
 	fn collect_latest(&self) -> Result<OperationsInfo, String> {
-		if let Some(ref operations) = *self.operations.lock() {
-			let hh: H256 = self.this.hash.into();
-			trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
-			let this_fork = operations.release(CLIENT_ID, &self.this.hash.into()).ok()
-				.and_then(|(fork, track, _, _)| {
-					trace!(target: "updater", "Operations returned fork={}, track={}", fork as u64, track);
-					if track > 0 {Some(fork as u64)} else {None}
-				});
+		if let Some(ref operations) = *self.operations.lock() { // @TODO remplacer par if some do call
+			if let Some(ref do_call) = *self.do_call.lock() {
+				let hh: H256 = self.this.hash.into();
+				trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
+				let this_fork = operations.release(CLIENT_ID, &self.this.hash.into()).ok()
+					.and_then(|(fork, track, _, _)| {
+						trace!(target: "updater", "Operations returned fork={}, track={}", fork as u64, track);
+						if track > 0 {Some(fork as u64)} else {None}
+					});
 
-			if self.track() == ReleaseTrack::Unknown {
-				return Err(format!("Current executable ({}) is unreleased.", H160::from(self.this.hash)));
+				if self.track() == ReleaseTrack::Unknown {
+					return Err(format!("Current executable ({}) is unreleased.", H160::from(self.this.hash)));
+				}
+
+				// todo utiliser Some(do_call_fn) comme ça pas besoin de unwrap
+				// let latest_in_track = operations.latest_in_track(CLIENT_ID, self.track().into())?;
+				let latest_in_track = self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), self.track().into(), &**do_call).map_err(|e| format!("{:?}", e))?;
+				let in_track = Self::collect_release_info(operations, &latest_in_track)?;
+				let mut in_minor = Some(in_track.clone());
+				const PROOF: &'static str = "in_minor initialised and assigned with Some; loop breaks if None assigned; qed";
+				while in_minor.as_ref().expect(PROOF).version.track != self.track() {
+					let track = match in_minor.as_ref().expect(PROOF).version.track {
+						ReleaseTrack::Beta => ReleaseTrack::Stable,
+						ReleaseTrack::Nightly => ReleaseTrack::Beta,
+						_ => { in_minor = None; break; }
+					};
+					in_minor = Some(Self::collect_release_info(operations, &operations.latest_in_track(CLIENT_ID, track.into())?)?);
+				}
+
+				Ok(OperationsInfo {
+					fork: operations.latest_fork()? as u64,
+					this_fork: this_fork,
+					track: in_track,
+					minor: in_minor,
+				})
 			}
-
-			let latest_in_track = operations.latest_in_track(CLIENT_ID, self.track().into())?;
-			let in_track = Self::collect_release_info(operations, &latest_in_track)?;
-			let mut in_minor = Some(in_track.clone());
-			const PROOF: &'static str = "in_minor initialised and assigned with Some; loop breaks if None assigned; qed";
-			while in_minor.as_ref().expect(PROOF).version.track != self.track() {
-				let track = match in_minor.as_ref().expect(PROOF).version.track {
-					ReleaseTrack::Beta => ReleaseTrack::Stable,
-					ReleaseTrack::Nightly => ReleaseTrack::Beta,
-					_ => { in_minor = None; break; }
-				};
-				in_minor = Some(Self::collect_release_info(operations, &operations.latest_in_track(CLIENT_ID, track.into())?)?);
-			}
-
-			Ok(OperationsInfo {
-				fork: operations.latest_fork()? as u64,
-				this_fork: this_fork,
-				track: in_track,
-				minor: in_minor,
-			})
 		} else {
 			Err("Operations not available".into())
 		}
@@ -251,11 +266,14 @@ impl Updater {
 			return;
 		}
 
-		if self.operations.lock().is_none() {
+		if self.do_call.lock().is_none() { // @TODO if self.do_call.is_none()
 			if let Some(ops_addr) = self.client.upgrade().and_then(|c| c.registry_address("operations".into())) {
 				trace!(target: "updater", "Found operations at {}", ops_addr);
-				let client = self.client.clone();
-				*self.operations.lock() = Some(Operations::new(ops_addr, move |a, d| client.upgrade().ok_or("No client!".into()).and_then(|c| c.call_contract(BlockId::Latest, a, d))));
+				let client = self.client.clone(); // @@@
+				// *self.operations.lock() = Some(Operations::new(ops_addr, move |a, d| client.upgrade().ok_or("No client!".into()).and_then(|c| c.call_contract(BlockId::Latest, a, d))));
+				// je pense que les types ne matchent pas
+				*self.do_call.lock() = Some(Box::new(move |input| client.upgrade().ok_or("No client!".into()).and_then(|c| c.call_contract(BlockId::Latest, ops_addr, input)).map_err(|e| format!("{:?}", e))));
+				// sinon test self.client direct
 			} else {
 				// No Operations contract - bail.
 				return;
@@ -447,9 +465,11 @@ mod tests {
 		let address : ::util::Address = 0x111114df6d3c2b833ace.into();
 		let closure = move |address, data| Err("Mock mock mock".to_owned());
 
+		println!("collect_latest b");
 		let mut m = updater.operations.lock();
 		*m = Some(Operations::new(address, closure));
 		// updater
+		println!("collect_latest c");
 		let result = updater.collect_latest();
 		println!("collect_latest result {:?}",result);
 	}
