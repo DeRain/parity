@@ -189,7 +189,7 @@ impl Updater {
 			let hh: H256 = self.this.hash.into();
 			trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
 			let this_fork = self.operations_contract.functions().release().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
-				self.this.hash.into(),
+				{let x : ::bigint::hash::H160 = self.this.hash.into(); x.into},
 				&**do_call).ok()
 				.and_then(|(fork, track, _, _)| {
 					let fork_u64 : u64 = UpdaterUtils::uint_to_u64(fork);
