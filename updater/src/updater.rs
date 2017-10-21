@@ -189,7 +189,8 @@ impl Updater {
 			let hh: H256 = self.this.hash.into();
 			trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
 			let this_fork = self.operations_contract.functions().release().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
-				{let x : ::bigint::hash::H160 = self.this.hash.into(); x.into},
+			// self.this.hash is ::bigint::hash::U256
+				{let x : ::bigint::prelude::H256 = ::bigint::prelude::H256::from(self.this.hash); x }, // needs to be [u8;32] @@@ @@TODO UpdaterUtils todo check if matches (unsigned)
 				&**do_call).ok()
 				.and_then(|(fork, track, _, _)| {
 					let fork_u64 : u64 = UpdaterUtils::uint_to_u64(fork);
@@ -205,7 +206,9 @@ impl Updater {
 
 			// todo utiliser Some(do_call_fn) comme ça pas besoin de unwrap
 			// let latest_in_track = operations.latest_in_track(CLIENT_ID, self.track().into())?;
-			let latest_in_track = self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), self.track().into(), &**do_call).map_err(|e| format!("{:?}", e)).map(|x| UpdaterUtils::uint_to_h256(x) )?;
+			let latest_in_track = self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
+			{let x : ::bigint::prelude::U256 = ::bigint::prelude::U256::from(self.track().into()); x }, // needs self.track ().into(), /// needs to be Uint = [u8; 32]; unsigned integ
+			&**do_call).map_err(|e| format!("{:?}", e)).map(|x| UpdaterUtils::uint_to_h256(x) )?;
 			let in_track = Self::collect_release_info(operations, &latest_in_track)?;
 			let mut in_minor = Some(in_track.clone());
 			const PROOF: &'static str = "in_minor initialised and assigned with Some; loop breaks if None assigned; qed";
