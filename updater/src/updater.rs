@@ -50,6 +50,14 @@ mod UpdaterUtils {
 		bigint::prelude::U256::from(uint.as_ref()).as_u64()
 	}
 
+	pub fn uint_to_u32(uint: [u8; 32]) -> u32 {
+		bigint::prelude::U256::from(uint.as_ref()).as_u32()
+	}
+
+	pub fn uint_to_u8(uint: [u8; 32]) -> u8 {
+		bigint::prelude::U256::from(uint.as_ref()).as_u32() as u8
+	}
+
 	pub fn uint_to_h256(uint: [u8; 32]) -> bigint::prelude::H256 {
 		bigint::prelude::H256::from(uint.as_ref())
 	}
@@ -166,9 +174,18 @@ impl Updater {
 		*self.exit_handler.lock() = Some(Box::new(f));
 	}
 
-	fn collect_release_info(operations: &Operations, release_id: &H256) -> Result<ReleaseInfo, String> {
-		let (fork, track, semver, is_critical) = operations.release(CLIENT_ID, release_id)?;
-		let latest_binary = operations.checksum(CLIENT_ID, release_id, &platform())?;
+	// TODO why is this function static ?
+	fn collect_release_info(operations_contract: &operations_contract::Operations, do_call: &Box<Fn(Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync + 'static>, release_id: &H256) -> Result<ReleaseInfo, String> {
+		// maintenant return  ( ethabi::Uint , ethabi::Uint , ethabi::Uint , bool )
+		// avant return (u32, u8, u32, bool)
+		// release_id doit être into ethabi::hash, càd [u8;32]
+		let (fork, track, semver, is_critical) = operations_contract.functions().release().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), release_id.to_owned(), &**do_call).map_err(|e| format!("{:?}", e))?;
+		let (fork, track, semver) = (UpdaterUtils::uint_to_u32(fork), UpdaterUtils::uint_to_u8(track), UpdaterUtils::uint_to_u32(semver));
+
+		// maintenant ethabi::hash
+		// avant bigint::hash::H256
+		let latest_binary = operations_contract.functions().checksum().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), release_id.to_owned(), UpdaterUtils::str_to_ethabi_hash(&platform()), &**do_call).map_err(|e| format!("{:?}", e))?;
+		let latest_binary = ::bigint::hash::H256::from(latest_binary);
 		Ok(ReleaseInfo {
 			version: VersionInfo::from_raw(semver, track, release_id.clone().into()),
 			is_critical: is_critical,
@@ -207,9 +224,9 @@ impl Updater {
 			// todo utiliser Some(do_call_fn) comme ça pas besoin de unwrap
 			// let latest_in_track = operations.latest_in_track(CLIENT_ID, self.track().into())?;
 			let latest_in_track = self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
-			{let x : ::bigint::prelude::U256 = ::bigint::prelude::U256::from(self.track().into()); x }, // needs self.track ().into(), /// needs to be Uint = [u8; 32]; unsigned integ
+			{let x : ::bigint::prelude::U256 = ::bigint::prelude::U256::from({ let y : u8 = self.track().into(); y}); x }, // needs self.track ().into(), /// needs to be Uint = [u8; 32]; unsigned integ
 			&**do_call).map_err(|e| format!("{:?}", e)).map(|x| UpdaterUtils::uint_to_h256(x) )?;
-			let in_track = Self::collect_release_info(operations, &latest_in_track)?;
+			let in_track = Self::collect_release_info(&self.operations_contract, do_call, &latest_in_track)?;
 			let mut in_minor = Some(in_track.clone());
 			const PROOF: &'static str = "in_minor initialised and assigned with Some; loop breaks if None assigned; qed";
 			while in_minor.as_ref().expect(PROOF).version.track != self.track() {
@@ -218,7 +235,7 @@ impl Updater {
 					ReleaseTrack::Nightly => ReleaseTrack::Beta,
 					_ => { in_minor = None; break; }
 				};
-				in_minor = Some(Self::collect_release_info(operations, &operations.latest_in_track(CLIENT_ID, track.into())?)?);
+				in_minor = Some(Self::collect_release_info(&self.operations_contract, do_call, &operations.latest_in_track(CLIENT_ID, track.into())?)?);
 			}
 
 			Ok(OperationsInfo {
