@@ -202,7 +202,7 @@ impl Updater {
 	}
 
 	fn collect_latest(&self) -> Result<OperationsInfo, String> {
-		if let (Some(ref operations), Some(ref do_call)) = (*self.operations.lock(), *self.do_call.lock()) { // @TODO remplacer par if some do call
+		if let &Some(ref do_call) = &*self.do_call.lock() { // @TODO remplacer par if some do call
 			let hh: H256 = self.this.hash.into();
 			trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
 			let this_fork = self.operations_contract.functions().release().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
@@ -235,11 +235,11 @@ impl Updater {
 					ReleaseTrack::Nightly => ReleaseTrack::Beta,
 					_ => { in_minor = None; break; }
 				};
-				in_minor = Some(Self::collect_release_info(&self.operations_contract, do_call, &operations.latest_in_track(CLIENT_ID, track.into())?)?);
+				in_minor = Some(Self::collect_release_info(&self.operations_contract, do_call, &::bigint::hash::H256::from(self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), 	{let x : ::bigint::prelude::U256 = ::bigint::prelude::U256::from({ let y : u8 = self.track().into(); y}); x }, &**do_call).map_err(|e| format!("{:?}", e))?))?);
 			}
 
 			Ok(OperationsInfo {
-				fork: operations.latest_fork()? as u64,
+				fork: UpdaterUtils::uint_to_u64(self.operations_contract.functions().latest_fork().call(&**do_call).map_err(|e| format!("{:?}", e))?), // retourne u32 before; maintenant Uint
 				this_fork: this_fork,
 				track: in_track,
 				minor: in_minor,
