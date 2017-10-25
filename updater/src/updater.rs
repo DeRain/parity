@@ -24,7 +24,6 @@ use ethsync::{SyncProvider};
 use futures::future;
 use hash_fetch::{self as fetch, HashFetch};
 use hash_fetch::fetch::Client as FetchService;
-use operations::Operations;
 use parity_reactor::Remote;
 use path::restrict_permissions_owner;
 use service::{Service};
@@ -38,7 +37,7 @@ use util::misc;
 
 use_contract!(operations_contract,"Operations","./res/operations.abi");
 
-mod UpdaterUtils {
+mod updater_utils {
 	use ethabi;
 	use bigint;
 	pub fn str_to_ethabi_hash(s: &str) -> ethabi::Hash {
@@ -122,7 +121,6 @@ pub struct Updater {
 	client: Weak<BlockChainClient>,
 	sync: Weak<SyncProvider>,
 	fetcher: Mutex<Option<fetch::Client>>,
-	operations: Mutex<Option<Operations>>,
 	operations_contract: operations_contract::Operations,
 	do_call: Mutex<Option<Box<Fn(Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync + 'static>>>,
 	exit_handler: Mutex<Option<Box<Fn() + 'static + Send>>>,
@@ -156,7 +154,6 @@ impl Updater {
 			client: client.clone(),
 			sync: sync.clone(),
 			fetcher: Mutex::new(None),
-			operations: Mutex::new(None),
 			operations_contract: operations_contract::Operations::default(),
 			do_call: Mutex::new(None),
 			exit_handler: Mutex::new(None),
@@ -179,12 +176,12 @@ impl Updater {
 		// maintenant return  ( ethabi::Uint , ethabi::Uint , ethabi::Uint , bool )
 		// avant return (u32, u8, u32, bool)
 		// release_id doit être into ethabi::hash, càd [u8;32]
-		let (fork, track, semver, is_critical) = operations_contract.functions().release().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), release_id.to_owned(), &**do_call).map_err(|e| format!("{:?}", e))?;
-		let (fork, track, semver) = (UpdaterUtils::uint_to_u32(fork), UpdaterUtils::uint_to_u8(track), UpdaterUtils::uint_to_u32(semver));
+		let (fork, track, semver, is_critical) = operations_contract.functions().release().call(updater_utils::str_to_ethabi_hash(&CLIENT_ID), release_id.to_owned(), &**do_call).map_err(|e| format!("{:?}", e))?;
+		let (fork, track, semver) = (updater_utils::uint_to_u32(fork), updater_utils::uint_to_u8(track), updater_utils::uint_to_u32(semver));
 
 		// maintenant ethabi::hash
 		// avant bigint::hash::H256
-		let latest_binary = operations_contract.functions().checksum().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), release_id.to_owned(), UpdaterUtils::str_to_ethabi_hash(&platform()), &**do_call).map_err(|e| format!("{:?}", e))?;
+		let latest_binary = operations_contract.functions().checksum().call(updater_utils::str_to_ethabi_hash(&CLIENT_ID), release_id.to_owned(), updater_utils::str_to_ethabi_hash(&platform()), &**do_call).map_err(|e| format!("{:?}", e))?;
 		let latest_binary = ::bigint::hash::H256::from(latest_binary);
 		Ok(ReleaseInfo {
 			version: VersionInfo::from_raw(semver, track, release_id.clone().into()),
@@ -205,13 +202,13 @@ impl Updater {
 		if let &Some(ref do_call) = &*self.do_call.lock() { // @TODO remplacer par if some do call
 			let hh: H256 = self.this.hash.into();
 			trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, hh);
-			let this_fork = self.operations_contract.functions().release().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
+			let this_fork = self.operations_contract.functions().release().call(updater_utils::str_to_ethabi_hash(&CLIENT_ID),
 			// self.this.hash is ::bigint::hash::U256
-				{let x : ::bigint::prelude::H256 = ::bigint::prelude::H256::from(self.this.hash); x }, // needs to be [u8;32] @@@ @@TODO UpdaterUtils todo check if matches (unsigned)
+				{let x : ::bigint::prelude::H256 = ::bigint::prelude::H256::from(self.this.hash); x }, // needs to be [u8;32] @@@ @@TODO updater_utils todo check if matches (unsigned)
 				&**do_call).ok()
 				.and_then(|(fork, track, _, _)| {
-					let fork_u64 : u64 = UpdaterUtils::uint_to_u64(fork);
-					let track_u64 : u64 = UpdaterUtils::uint_to_u64(track);
+					let fork_u64 : u64 = updater_utils::uint_to_u64(fork);
+					let track_u64 : u64 = updater_utils::uint_to_u64(track);
 					trace!(target: "updater", "Operations returned fork={}, track={}", fork_u64, track_u64);
 					if track_u64 > 0 {Some(fork_u64)} else {None}
 				});
@@ -223,9 +220,9 @@ impl Updater {
 
 			// todo utiliser Some(do_call_fn) comme ça pas besoin de unwrap
 			// let latest_in_track = operations.latest_in_track(CLIENT_ID, self.track().into())?;
-			let latest_in_track = self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID),
+			let latest_in_track = self.operations_contract.functions().latest_in_track().call(updater_utils::str_to_ethabi_hash(&CLIENT_ID),
 			{let x : ::bigint::prelude::U256 = ::bigint::prelude::U256::from({ let y : u8 = self.track().into(); y}); x }, // needs self.track ().into(), /// needs to be Uint = [u8; 32]; unsigned integ
-			&**do_call).map_err(|e| format!("{:?}", e)).map(|x| UpdaterUtils::uint_to_h256(x) )?;
+			&**do_call).map_err(|e| format!("{:?}", e)).map(|x| updater_utils::uint_to_h256(x) )?;
 			let in_track = Self::collect_release_info(&self.operations_contract, do_call, &latest_in_track)?;
 			let mut in_minor = Some(in_track.clone());
 			const PROOF: &'static str = "in_minor initialised and assigned with Some; loop breaks if None assigned; qed";
@@ -235,11 +232,11 @@ impl Updater {
 					ReleaseTrack::Nightly => ReleaseTrack::Beta,
 					_ => { in_minor = None; break; }
 				};
-				in_minor = Some(Self::collect_release_info(&self.operations_contract, do_call, &::bigint::hash::H256::from(self.operations_contract.functions().latest_in_track().call(UpdaterUtils::str_to_ethabi_hash(&CLIENT_ID), 	{let x : ::bigint::prelude::U256 = ::bigint::prelude::U256::from({ let y : u8 = self.track().into(); y}); x }, &**do_call).map_err(|e| format!("{:?}", e))?))?);
+				in_minor = Some(Self::collect_release_info(&self.operations_contract, do_call, &::bigint::hash::H256::from(self.operations_contract.functions().latest_in_track().call(updater_utils::str_to_ethabi_hash(&CLIENT_ID), 	{let x : ::bigint::prelude::U256 = ::bigint::prelude::U256::from({ let y : u8 = track.into(); y}); x }, &**do_call).map_err(|e| format!("{:?}", e))?))?);
 			}
 
 			Ok(OperationsInfo {
-				fork: UpdaterUtils::uint_to_u64(self.operations_contract.functions().latest_fork().call(&**do_call).map_err(|e| format!("{:?}", e))?), // retourne u32 before; maintenant Uint
+				fork: updater_utils::uint_to_u64(self.operations_contract.functions().latest_fork().call(&**do_call).map_err(|e| format!("{:?}", e))?), // retourne u32 before; maintenant Uint
 				this_fork: this_fork,
 				track: in_track,
 				minor: in_minor,
@@ -487,7 +484,6 @@ mod tests {
 		use std::sync::Weak;
 		use std::sync::Arc;
 		use self::test_utils::*;
-		use operations::Operations;
 
 		let client : Arc<BlockChainClient> = Arc::new(TestBlockChainClient::default());
 		let sync : Arc<SyncProvider> = Arc::new(TestSyncProvider::new(Config {network_id: 1u64, num_peers: 12}));
@@ -497,8 +493,8 @@ mod tests {
 		let closure = move |address, data| Err("Mock mock mock".to_owned());
 
 		println!("collect_latest b");
-		let mut m = updater.operations.lock();
-		*m = Some(Operations::new(address, closure));
+		// let mut m = updater.operations.lock();
+		// *m = Some(Operations::new(address, closure));
 		// updater
 		println!("collect_latest c");
 		let result = updater.collect_latest();
@@ -507,14 +503,13 @@ mod tests {
 
 	#[test]
 	fn test_derive_call() {
-		use operations::Operations;
 		let address : ::util::Address = 0x111114df6d3c2b833ace.into();
 		let closure = move |address, data| Err("Mock mock mock".to_owned());
-		let ops = Operations::new(address, closure);
+		// let ops = Operations::new(address, closure);
 		let bh : ::bigint::prelude::U256 = 3u64.into();
 		// let result = ops.is_latest(&"184218".to_owned(), &bh);
-		let result = ops.latest_in_track(&"184218".to_owned(), 123u8);
-		println!("{:?}",result);
+		// let result = ops.latest_in_track(&"184218".to_owned(), 123u8);
+		// println!("{:?}",result);
 
 		// @TODO check quand operations est initialisé, j'ai pas forcément le droit de replace in place
 	}
